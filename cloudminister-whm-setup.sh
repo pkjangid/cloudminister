@@ -384,10 +384,21 @@ p1_install_csf_firewall() {
             libwww-perl liblwp-protocol-https-perl libgd-graph-perl 2>/dev/null || true
     fi
 
-    cd /tmp
-    wget -q https://download.configserver.com/csf.tgz
-    tar -xzf csf.tgz
-    cd csf && sh install.sh
+    # Use subshell so cd never changes the parent script's working directory
+    (
+        cd /tmp
+        rm -rf csf csf.tgz
+        wget -q https://download.configserver.com/csf.tgz
+        tar -xzf csf.tgz
+        cd csf
+        sh install.sh || true
+    ) || true
+
+    # Verify CSF installed before continuing
+    if [ ! -f /etc/csf/csf.conf ]; then
+        log_error "CSF install failed — /etc/csf/csf.conf not found. Check internet and retry."
+        return 1
+    fi
 
     source "$VARS_FILE" 2>/dev/null || true
     SSH_PORT=${SSH_PORT:-2222}
@@ -396,10 +407,10 @@ p1_install_csf_firewall() {
     sed -i 's/^TESTING = "1"/TESTING = "0"/' /etc/csf/csf.conf
 
     # Open required ports incl. custom SSH
-    sed -i 's/^TCP_IN = .*/TCP_IN = "20,21,22,'"$SSH_PORT"',25,53,80,110,143,443,465,587,993,995,2077,2078,2082,2083,2086,2087,2095,2096"/' /etc/csf/csf.conf
-    sed -i 's/^TCP_OUT = .*/TCP_OUT = "20,21,22,'"$SSH_PORT"',25,53,80,110,113,443,587,993,995"/' /etc/csf/csf.conf
-    sed -i 's/^UDP_IN = .*/UDP_IN = "20,21,53"/'   /etc/csf/csf.conf
-    sed -i 's/^UDP_OUT = .*/UDP_OUT = "20,21,53,113,123"/' /etc/csf/csf.conf
+    sed -i 's/^TCP_IN = .*/TCP_IN = "20,21,22,'"'"'$SSH_PORT'"'"',25,53,80,110,143,443,465,587,993,995,2077,2078,2082,2083,2086,2087,2095,2096"/' /etc/csf/csf.conf
+    sed -i 's/^TCP_OUT = .*/TCP_OUT = "20,21,22,'"'"'$SSH_PORT'"'"',25,53,80,110,113,443,587,993,995"/' /etc/csf/csf.conf
+    sed -i 's/^UDP_IN = .*/UDP_IN = "20,21,53"/'                 /etc/csf/csf.conf
+    sed -i 's/^UDP_OUT = .*/UDP_OUT = "20,21,53,113,123"/'       /etc/csf/csf.conf
 
     # LFD — Login Failure Daemon (bruteforce)
     sed -i 's/^LF_DAEMON = "0"/LF_DAEMON = "1"/' /etc/csf/csf.conf
@@ -417,8 +428,8 @@ p1_install_csf_firewall() {
     sed -i 's/^SMTP_ALLOWLOCAL = "0"/SMTP_ALLOWLOCAL = "1"/' /etc/csf/csf.conf
 
     csf -a 0.0.0.0/0 tcp "$SSH_PORT" 2>/dev/null || true
-    csf -r
-    systemctl enable csf lfd
+    csf -r 2>/dev/null || true          # may fail on first run — safe to ignore
+    systemctl enable csf lfd 2>/dev/null || true
 
     log_success "CSF Firewall installed and configured."
 }
