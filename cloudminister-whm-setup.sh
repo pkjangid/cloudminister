@@ -388,17 +388,46 @@ p1_install_csf_firewall() {
     (
         cd /tmp
         rm -rf csf csf.tgz
-        wget -q https://download.configserver.com/csf.tgz
+
+        log_info "Downloading CSF from CloudMinister GitHub..."
+        CSF_URL="https://raw.githubusercontent.com/pkjangid/cloudminister/main/csf.tgz"
+
+        if wget --timeout=30 --tries=3 -O csf.tgz "$CSF_URL" 2>&1; then
+            log_info "CSF downloaded via wget."
+        elif curl --connect-timeout 30 --retry 3 -L -o csf.tgz "$CSF_URL" 2>&1; then
+            log_info "CSF downloaded via curl."
+        else
+            echo "[ERROR] Failed to download CSF from: $CSF_URL"
+            exit 1
+        fi
+
+        if [ ! -s csf.tgz ]; then
+            echo "[ERROR] CSF download incomplete — file is empty."
+            exit 1
+        fi
+
+        log_info "Extracting CSF..."
         tar -xzf csf.tgz
+
+        if [ ! -d csf ]; then
+            echo "[ERROR] CSF extraction failed — csf/ directory not found."
+            exit 1
+        fi
+
         cd csf
+        log_info "Running CSF install.sh..."
         sh install.sh || true
     ) || true
 
     # Verify CSF installed before continuing
     if [ ! -f /etc/csf/csf.conf ]; then
-        log_error "CSF install failed — /etc/csf/csf.conf not found. Check internet and retry."
+        log_error "CSF install failed — /etc/csf/csf.conf not found."
+        log_error "Manual install:"
+        log_error "  wget https://raw.githubusercontent.com/pkjangid/cloudminister/main/csf.tgz -O /tmp/csf.tgz"
+        log_error "  cd /tmp && tar -xzf csf.tgz && cd csf && sh install.sh"
         return 1
     fi
+
 
     source "$VARS_FILE" 2>/dev/null || true
     SSH_PORT=${SSH_PORT:-2222}
