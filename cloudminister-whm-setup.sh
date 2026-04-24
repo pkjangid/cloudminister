@@ -384,49 +384,60 @@ p1_install_csf_firewall() {
             libwww-perl liblwp-protocol-https-perl libgd-graph-perl 2>/dev/null || true
     fi
 
-    # Use subshell so cd never changes the parent script's working directory
-    (
-        cd /tmp
-        rm -rf csf csf.tgz
+    CSF_URL="https://raw.githubusercontent.com/pkjangid/cloudminister/main/csf.tgz"
+    CSF_TMP="/tmp/csf.tgz"
+    CSF_DIR="/tmp/csf"
 
-        log_info "Downloading CSF from CloudMinister GitHub..."
-        CSF_URL="https://raw.githubusercontent.com/pkjangid/cloudminister/main/csf.tgz"
+    # Clean previous attempts
+    rm -rf "$CSF_TMP" "$CSF_DIR"
 
-        if wget --timeout=30 --tries=3 -O csf.tgz "$CSF_URL" 2>&1; then
-            log_info "CSF downloaded via wget."
-        elif curl --connect-timeout 30 --retry 3 -L -o csf.tgz "$CSF_URL" 2>&1; then
-            log_info "CSF downloaded via curl."
-        else
-            echo "[ERROR] Failed to download CSF from: $CSF_URL"
-            exit 1
+    # Temporarily disable exit-on-error so download failures are visible
+    set +e
+
+    log_info "Downloading CSF from: $CSF_URL"
+    wget --timeout=30 --tries=3 --show-progress -O "$CSF_TMP" "$CSF_URL"
+    WGET_RC=$?
+
+    if [ $WGET_RC -ne 0 ] || [ ! -s "$CSF_TMP" ]; then
+        log_warn "wget failed (rc=$WGET_RC), trying curl..."
+        curl --connect-timeout 30 --retry 3 -L --progress-bar -o "$CSF_TMP" "$CSF_URL"
+        CURL_RC=$?
+        if [ $CURL_RC -ne 0 ] || [ ! -s "$CSF_TMP" ]; then
+            log_error "Both wget and curl failed to download CSF."
+            log_error "URL: $CSF_URL"
+            log_error "Test manually: curl -L $CSF_URL -o /tmp/csf.tgz && ls -lh /tmp/csf.tgz"
+            set -e
+            return 1
         fi
+    fi
 
-        if [ ! -s csf.tgz ]; then
-            echo "[ERROR] CSF download incomplete — file is empty."
-            exit 1
-        fi
+    log_info "Download complete. Size: $(du -sh "$CSF_TMP" | cut -f1)"
 
-        log_info "Extracting CSF..."
-        tar -xzf csf.tgz
+    log_info "Extracting CSF..."
+    tar -xzf "$CSF_TMP" -C /tmp
+    TAR_RC=$?
 
-        if [ ! -d csf ]; then
-            echo "[ERROR] CSF extraction failed — csf/ directory not found."
-            exit 1
-        fi
-
-        cd csf
-        log_info "Running CSF install.sh..."
-        sh install.sh || true
-    ) || true
-
-    # Verify CSF installed before continuing
-    if [ ! -f /etc/csf/csf.conf ]; then
-        log_error "CSF install failed — /etc/csf/csf.conf not found."
-        log_error "Manual install:"
-        log_error "  wget https://raw.githubusercontent.com/pkjangid/cloudminister/main/csf.tgz -O /tmp/csf.tgz"
-        log_error "  cd /tmp && tar -xzf csf.tgz && cd csf && sh install.sh"
+    if [ $TAR_RC -ne 0 ] || [ ! -d "$CSF_DIR" ]; then
+        log_error "CSF extraction failed (rc=$TAR_RC). File may be corrupt."
+        log_error "Try: tar -tzf $CSF_TMP | head  — to check archive contents"
+        set -e
         return 1
     fi
+
+    log_info "Running CSF install.sh..."
+    cd "$CSF_DIR"
+    sh install.sh
+    INSTALL_RC=$?
+    cd /root
+
+    set -e
+
+    if [ ! -f /etc/csf/csf.conf ]; then
+        log_error "CSF install.sh ran (rc=$INSTALL_RC) but /etc/csf/csf.conf not found."
+        return 1
+    fi
+
+    log_info "CSF installed successfully."
 
 
     source "$VARS_FILE" 2>/dev/null || true
