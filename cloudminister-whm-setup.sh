@@ -202,7 +202,8 @@ pkg_update() {
     else
         export DEBIAN_FRONTEND=noninteractive
         apt-get update -y
-        apt-get upgrade -y
+        # Use dist-upgrade to handle held-back packages (e.g. kernel updates)
+        apt-get dist-upgrade -y 2>/dev/null || apt-get upgrade -y
     fi
 }
 
@@ -278,9 +279,11 @@ p1_install_base_packages() {
             lsof unzip git bash-completion screen tmux \
             bind-utils mlocate nmap-ncat telnet perl
     else
+        # Ubuntu 22.04+ uses plocate (mlocate is removed)
+        # ncat is in nmap package on Ubuntu
         pkg_install htop iotop sysstat curl wget vim net-tools \
             lsof unzip git bash-completion screen tmux \
-            dnsutils mlocate ncat telnet perl \
+            dnsutils plocate ncat telnet perl \
             software-properties-common apt-transport-https ca-certificates
     fi
 
