@@ -47,71 +47,92 @@ else
 fi
 
 # ============================================================
-# SECTION 1: WHM Host Access Control (TCP Wrappers)
-# AlmaLinux/RHEL: create files if they don't exist
-# whostmgrd, cpaneld, sshd
+# SECTION 1: WHM Host Access Control
+# AlmaLinux 8/9: tcp_wrappers removed — use whmapi1 hostaccess API
+# Daemons: whostmgrd, cpaneld, sshd
 # Allow: 3.111.17.14 (CM IP), 65.1.28.228 (BM VPN IP), 163.227.92.110 (Client IP)
-# Deny:  ALL
+# Deny:  ALL others
 # ============================================================
 section "WHM Host Access Control List Rules"
 
-HOSTS_ALLOW="/etc/hosts.allow"
-HOSTS_DENY="/etc/hosts.deny"
-
-# Create files if they don't exist (AlmaLinux doesn't ship them by default)
-touch "$HOSTS_ALLOW" "$HOSTS_DENY"
-
-# Install tcp_wrappers if not present (RHEL/AlmaLinux)
-if command -v dnf &>/dev/null; then
-  if ! rpm -q tcp_wrappers &>/dev/null 2>&1; then
-    warn "tcp_wrappers not installed — installing..."
-    dnf install -y tcp_wrappers &>/dev/null && log "tcp_wrappers installed" || warn "tcp_wrappers not available on this EL version (continuing...)"
-  fi
-fi
-
-# Backup existing files
-cp "$HOSTS_ALLOW" "${HOSTS_ALLOW}.bak.$(date +%F-%H%M%S)" 2>/dev/null || true
-cp "$HOSTS_DENY"  "${HOSTS_DENY}.bak.$(date +%F-%H%M%S)"  2>/dev/null || true
-
-# Define allowed IPs
 CM_IP="3.111.17.14"
 BM_VPN_IP="65.1.28.228"
 CLIENT_IP="163.227.92.110"
 
 DAEMONS=("whostmgrd" "cpaneld" "sshd")
 
-# Remove any old managed block to avoid duplicates
-sed -i '/# BEGIN CloudMinister HAC Rules/,/# END CloudMinister HAC Rules/d' "$HOSTS_ALLOW"
-sed -i '/# BEGIN CloudMinister HAC Rules/,/# END CloudMinister HAC Rules/d' "$HOSTS_DENY"
-
-# Write allow rules
-{
-  echo ""
-  echo "# BEGIN CloudMinister HAC Rules"
-  for daemon in "${DAEMONS[@]}"; do
-    echo "$daemon : $CM_IP    : allow   # CM IP"
-    echo "$daemon : $BM_VPN_IP : allow   # BM VPN IP"
-    echo "$daemon : $CLIENT_IP : allow   # Client IP"
-  done
-  echo "# END CloudMinister HAC Rules"
-} >> "$HOSTS_ALLOW"
-
-log "hosts.allow rules written for: ${DAEMONS[*]}"
-
-# Write deny rules
-{
-  echo ""
-  echo "# BEGIN CloudMinister HAC Rules"
-  for daemon in "${DAEMONS[@]}"; do
-    echo "$daemon : ALL : deny   # Block all others"
-  done
-  echo "# END CloudMinister HAC Rules"
-} >> "$HOSTS_DENY"
-
-log "hosts.deny ALL rules written for: ${DAEMONS[*]}"
-
 if command -v whmapi1 &>/dev/null; then
-  warn "whmapi1 detected — rules also manageable from WHM > Host Access Control."
+  log "Using whmapi1 to apply Host Access Control rules (AlmaLinux)"
+
+  # First clear all existing HAC rules to avoid duplicates
+  EXISTING=$(whmapi1 hostaccess listrules 2>/dev/null)
+  HANDLES=$(echo "$EXISTING" | grep -oP '(?<=handle: )\S+' 2>/dev/null || true)
+  for handle in $HANDLES; do
+    whmapi1 hostaccess delrule handle="$handle" &>/dev/null || true
+  done
+  log "Cleared existing HAC rules"
+
+  # Add ALLOW rules for each daemon + IP combo (order matters — allow before deny)
+  for daemon in "${DAEMONS[@]}"; do
+    whmapi1 hostaccess addrule \
+      daemon="$daemon" \
+      host="$CM_IP" \
+      action="allow" &>/dev/null && log "ALLOW $daemon : $CM_IP (CM IP)" || warn "Failed: $daemon $CM_IP"
+
+    whmapi1 hostaccess addrule \
+      daemon="$daemon" \
+      host="$BM_VPN_IP" \
+      action="allow" &>/dev/null && log "ALLOW $daemon : $BM_VPN_IP (BM VPN IP)" || warn "Failed: $daemon $BM_VPN_IP"
+
+    whmapi1 hostaccess addrule \
+      daemon="$daemon" \
+      host="$CLIENT_IP" \
+      action="allow" &>/dev/null && log "ALLOW $daemon : $CLIENT_IP (Client IP)" || warn "Failed: $daemon $CLIENT_IP"
+
+    # Add DENY ALL last (must come after allow rules)
+    whmapi1 hostaccess addrule \
+      daemon="$daemon" \
+      host="ALL" \
+      action="deny" &>/dev/null && log "DENY  $daemon : ALL" || warn "Failed: DENY $daemon ALL"
+  done
+
+  log "WHM Host Access Control rules applied via whmapi1"
+
+else
+  # Fallback for non-cPanel or Ubuntu/Debian systems using tcp_wrappers
+  warn "whmapi1 not found — falling back to hosts.allow/hosts.deny"
+
+  HOSTS_ALLOW="/etc/hosts.allow"
+  HOSTS_DENY="/etc/hosts.deny"
+  touch "$HOSTS_ALLOW" "$HOSTS_DENY"
+
+  cp "$HOSTS_ALLOW" "${HOSTS_ALLOW}.bak.$(date +%F-%H%M%S)" 2>/dev/null || true
+  cp "$HOSTS_DENY"  "${HOSTS_DENY}.bak.$(date +%F-%H%M%S)"  2>/dev/null || true
+
+  sed -i '/# BEGIN CloudMinister HAC Rules/,/# END CloudMinister HAC Rules/d' "$HOSTS_ALLOW"
+  sed -i '/# BEGIN CloudMinister HAC Rules/,/# END CloudMinister HAC Rules/d' "$HOSTS_DENY"
+
+  {
+    echo ""
+    echo "# BEGIN CloudMinister HAC Rules"
+    for daemon in "${DAEMONS[@]}"; do
+      echo "$daemon : $CM_IP    : allow   # CM IP"
+      echo "$daemon : $BM_VPN_IP : allow   # BM VPN IP"
+      echo "$daemon : $CLIENT_IP : allow   # Client IP"
+    done
+    echo "# END CloudMinister HAC Rules"
+  } >> "$HOSTS_ALLOW"
+
+  {
+    echo ""
+    echo "# BEGIN CloudMinister HAC Rules"
+    for daemon in "${DAEMONS[@]}"; do
+      echo "$daemon : ALL : deny"
+    done
+    echo "# END CloudMinister HAC Rules"
+  } >> "$HOSTS_DENY"
+
+  log "hosts.allow / hosts.deny rules written for: ${DAEMONS[*]}"
 fi
 
 # ============================================================
