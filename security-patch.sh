@@ -211,15 +211,7 @@ else
   exit 1
 fi
 
-# Save password to a root-only file as backup
-PASS_LOG="/root/.hardening_credentials"
-{
-  echo "# CloudMinister Server Hardening - $(date)"
-  echo "ROOT_PASSWORD=${NEW_ROOT_PASS}"
-  echo "SSH_PORT=22587"
-} > "$PASS_LOG"
-chmod 600 "$PASS_LOG"
-log "Credentials saved to $PASS_LOG (chmod 600, root only)"
+
 
 # ============================================================
 # SUMMARY
@@ -249,8 +241,6 @@ echo -e "${RED}╠════════════════════�
 echo -e "${RED}║${NC}  New Root Password: ${YELLOW}${NEW_ROOT_PASS}${NC}"
 echo -e "${RED}║${NC}  SSH Port         : ${YELLOW}22587${NC}"
 echo -e "${RED}╚══════════════════════════════════════════╝${NC}"
-echo ""
-echo "  Credentials also saved to: $PASS_LOG"
 echo ""
 warn "IMPORTANT: Open a new SSH session on port $NEW_SSH_PORT with the new password to verify access before closing this session."
 echo ""
