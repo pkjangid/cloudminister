@@ -200,18 +200,8 @@ done < /etc/passwd
 # ============================================================
 section "Generating & Setting Random Root Password"
 
-# Generate a strong 20-character password using openssl (most reliable method)
-NEW_ROOT_PASS=$(openssl rand -base64 32 | tr -dc 'A-Za-z0-9!@#$%^&*' | head -c 20)
-
-# Fallback: if openssl not available, use /dev/urandom with LC_ALL fix
-if [[ -z "$NEW_ROOT_PASS" ]]; then
-  NEW_ROOT_PASS=$(LC_ALL=C tr -dc 'A-Za-z0-9!@#$%^&*' < /dev/urandom | dd bs=1 count=20 2>/dev/null)
-fi
-
-# Final fallback: pure openssl hex (always works)
-if [[ -z "$NEW_ROOT_PASS" ]]; then
-  NEW_ROOT_PASS=$(openssl rand -hex 10)
-fi
+# Generate password using openssl only — no tr/head pipe (avoids hanging)
+NEW_ROOT_PASS=$(openssl rand -hex 16 | cut -c1-20)
 
 # Set the password
 if echo "root:${NEW_ROOT_PASS}" | chpasswd; then
