@@ -2,39 +2,77 @@
 
 set -euo pipefail
 
+VPN_IPS=(
+    "3.111.17.14"
+    "65.1.128.28"
+    "172.237.41.71"
+)
+
+CLIENT_IP="${1:-}"
+
 echo "===================================================="
 echo " CWP Access Restriction & Service Recovery Script"
 echo " Hostname: $(hostname -f 2>/dev/null || hostname)"
 echo " Date: $(date)"
 echo "===================================================="
 
-ALLOWED_IPS="3.111.17.14,65.1.128.28,172.237.41.71"
-
-echo
-echo "[1/12] Checking CSF installation..."
-
 if ! command -v csf >/dev/null 2>&1; then
     echo "ERROR: CSF is not installed."
     exit 1
 fi
 
-echo "OK: CSF is installed."
+# Detect SSH port
+SSH_PORT=$(grep -E '^[[:space:]]*Port[[:space:]]+' /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' | head -1)
 
-echo
-echo "[2/12] Detecting SSH port..."
+[ -z "${SSH_PORT:-}" ] && SSH_PORT="22"
 
-SSH_PORTS=$(grep -E '^Port ' /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' | xargs || true)
+PORTS=(
+    "$SSH_PORT"
+    "2031"
+    "2083"
+    "2087"
+    "2096"
+)
 
-if [ -z "${SSH_PORTS:-}" ]; then
-    SSH_PORTS="22"
+########################################################
+# ADD-ONLY MODE
+########################################################
+
+if [ -n "$CLIENT_IP" ]; then
+
+    echo
+    echo "ADD-ONLY MODE"
+    echo "Adding IP: $CLIENT_IP"
+    echo
+
+    for PORT in "${PORTS[@]}"; do
+
+        RULE="tcp|in|d=${PORT}|s=${CLIENT_IP}"
+
+        if grep -Fxq "$RULE" /etc/csf/csf.allow 2>/dev/null; then
+            echo "Port ${PORT}: already present"
+        else
+            echo "$RULE" >> /etc/csf/csf.allow
+            echo "Port ${PORT}: added"
+        fi
+
+    done
+
+    echo
+    echo "Reloading CSF..."
+    csf -r
+
+    echo
+    echo "Completed."
+    exit 0
 fi
 
-echo "Detected SSH Port(s): $SSH_PORTS"
-
-PORTS="$SSH_PORTS 2031 2083 2087 2096"
+########################################################
+# FULL REBUILD MODE
+########################################################
 
 echo
-echo "[3/12] Backing up CSF files..."
+echo "[1/10] Backing up CSF configuration..."
 
 cp -a /etc/csf/csf.allow "/etc/csf/csf.allow.$(date +%F-%H%M%S).bak"
 cp -a /etc/csf/csf.deny "/etc/csf/csf.deny.$(date +%F-%H%M%S).bak"
@@ -42,7 +80,7 @@ cp -a /etc/csf/csf.deny "/etc/csf/csf.deny.$(date +%F-%H%M%S).bak"
 echo "Backup completed."
 
 echo
-echo "[4/12] Enabling CSF..."
+echo "[2/10] Enabling CSF..."
 
 if systemctl list-unit-files 2>/dev/null | grep -q '^csf.service'; then
     systemctl enable csf >/dev/null 2>&1 || true
@@ -51,39 +89,39 @@ fi
 
 sed -i 's/^TESTING = "1"/TESTING = "0"/' /etc/csf/csf.conf || true
 
-echo "CSF enabled."
-
 echo
-echo "[5/12] Cleaning malformed and old rules..."
+echo "[3/10] Cleaning old management rules..."
 
 sed -i '/^n|d=.*|d$/d' /etc/csf/csf.allow
 sed -i '/^n|d=.*|d$/d' /etc/csf/csf.deny
 
-for PORT in $PORTS; do
-    sed -i "\#tcp|in|d=${PORT}|#d" /etc/csf/csf.allow
-    sed -i "\#tcp|in|d=${PORT}|#d" /etc/csf/csf.deny
+for PORT in "${PORTS[@]}"; do
+    sed -i "\#^tcp|in|d=${PORT}|s=#d" /etc/csf/csf.allow
+    sed -i "\#^tcp|in|d=${PORT}|s=0.0.0.0/0#d" /etc/csf/csf.deny
 done
 
-echo "Cleanup completed."
-
 echo
-echo "[6/12] Adding fresh allow/deny rules..."
+echo "[4/10] Creating fresh management rules..."
 
-for PORT in $PORTS; do
-    echo "tcp|in|d=${PORT}|s=${ALLOWED_IPS}" >> /etc/csf/csf.allow
+for PORT in "${PORTS[@]}"; do
+
+    for IP in "${VPN_IPS[@]}"; do
+        echo "tcp|in|d=${PORT}|s=${IP}" >> /etc/csf/csf.allow
+    done
+
     echo "tcp|in|d=${PORT}|s=0.0.0.0/0" >> /etc/csf/csf.deny
-    echo "Added rules for port ${PORT}"
+
+    echo "Configured port ${PORT}"
+
 done
 
 echo
-echo "[7/12] Reloading CSF..."
+echo "[5/10] Reloading CSF..."
 
 csf -r
 
-echo "CSF reloaded."
-
 echo
-echo "[8/12] Checking CWP services..."
+echo "[6/10] Checking CWP services..."
 
 SERVICES=(
     "cwp-phpfpm"
@@ -94,12 +132,9 @@ SERVICES=(
 for SERVICE in "${SERVICES[@]}"; do
 
     if ! systemctl list-unit-files | grep -q "^${SERVICE}.service"; then
-        echo "Service not found: ${SERVICE} (skipping)"
+        echo "${SERVICE}: not installed"
         continue
     fi
-
-    echo
-    echo "Processing ${SERVICE}..."
 
     if systemctl is-enabled "${SERVICE}" 2>/dev/null | grep -q masked; then
         echo "Unmasking ${SERVICE}"
@@ -109,53 +144,52 @@ for SERVICE in "${SERVICES[@]}"; do
     if ! systemctl is-enabled "${SERVICE}" >/dev/null 2>&1; then
         echo "Enabling ${SERVICE}"
         systemctl enable "${SERVICE}"
-    else
-        echo "${SERVICE} already enabled"
     fi
 
     if ! systemctl is-active "${SERVICE}" >/dev/null 2>&1; then
         echo "Starting ${SERVICE}"
         systemctl start "${SERVICE}"
-    else
-        echo "${SERVICE} already running"
     fi
+
 done
 
 echo
-echo "[9/12] Reloading systemd..."
-
+echo "[7/10] Reloading systemd..."
 systemctl daemon-reload
 
 echo
-echo "[10/12] Final service status..."
+echo "[8/10] Service Status"
 
 for SERVICE in "${SERVICES[@]}"; do
     if systemctl list-unit-files | grep -q "^${SERVICE}.service"; then
-        echo -n "${SERVICE}: "
+        printf "%-20s : " "$SERVICE"
         systemctl is-active "${SERVICE}" || true
     fi
 done
 
 echo
-echo "[11/12] Final CSF.ALLOW entries..."
+echo "[9/10] Final CSF Allow Rules"
 
-for PORT in $PORTS; do
+for PORT in "${PORTS[@]}"; do
     grep "^tcp|in|d=${PORT}|s=" /etc/csf/csf.allow || true
 done
 
 echo
-echo "[12/12] Final CSF.DENY entries..."
+echo "[10/10] Final CSF Deny Rules"
 
-for PORT in $PORTS; do
+for PORT in "${PORTS[@]}"; do
     grep "^tcp|in|d=${PORT}|s=0.0.0.0/0" /etc/csf/csf.deny || true
 done
 
 echo
 echo "===================================================="
-echo "Allowed IPs:"
-echo "$ALLOWED_IPS" | tr ',' '\n'
+echo "Completed Successfully"
 echo
-echo "Completed successfully."
-echo "Safe to run multiple times."
-echo "No duplicate CSF entries will be created."
+echo "Usage:"
+echo "  ./port-restriction.sh"
+echo "  ./port-restriction.sh <client_ip>"
+echo
+echo "Examples:"
+echo "  ./port-restriction.sh"
+echo "  ./port-restriction.sh 49.36.242.111"
 echo "===================================================="
