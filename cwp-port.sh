@@ -21,9 +21,7 @@ if ! command -v csf >/dev/null 2>&1; then
     exit 1
 fi
 
-# Detect SSH port
 SSH_PORT=$(grep -E '^[[:space:]]*Port[[:space:]]+' /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' | head -1)
-
 [ -z "${SSH_PORT:-}" ] && SSH_PORT="22"
 
 PORTS=(
@@ -46,7 +44,6 @@ if [ -n "$CLIENT_IP" ]; then
     echo
 
     for PORT in "${PORTS[@]}"; do
-
         RULE="tcp|in|d=${PORT}|s=${CLIENT_IP}"
 
         if grep -Fxq "$RULE" /etc/csf/csf.allow 2>/dev/null; then
@@ -55,7 +52,6 @@ if [ -n "$CLIENT_IP" ]; then
             echo "$RULE" >> /etc/csf/csf.allow
             echo "Port ${PORT}: added"
         fi
-
     done
 
     echo
@@ -83,6 +79,8 @@ echo
 echo "[2/10] Enabling CSF..."
 
 if systemctl list-unit-files 2>/dev/null | grep -q '^csf.service'; then
+    systemctl unmask csf.service >/dev/null 2>&1 || true
+    systemctl daemon-reload
     systemctl enable csf >/dev/null 2>&1 || true
     systemctl start csf >/dev/null 2>&1 || true
 fi
@@ -136,20 +134,20 @@ for SERVICE in "${SERVICES[@]}"; do
         continue
     fi
 
-    if systemctl is-enabled "${SERVICE}" 2>/dev/null | grep -q masked; then
-        echo "Unmasking ${SERVICE}"
-        systemctl unmask "${SERVICE}"
-    fi
+    echo "Unmasking ${SERVICE}..."
+    systemctl unmask "${SERVICE}.service" >/dev/null 2>&1 || true
 
-    if ! systemctl is-enabled "${SERVICE}" >/dev/null 2>&1; then
-        echo "Enabling ${SERVICE}"
-        systemctl enable "${SERVICE}"
-    fi
+    systemctl daemon-reload
 
-    if ! systemctl is-active "${SERVICE}" >/dev/null 2>&1; then
-        echo "Starting ${SERVICE}"
-        systemctl start "${SERVICE}"
-    fi
+    echo "Enabling ${SERVICE}..."
+    systemctl enable "${SERVICE}.service" >/dev/null 2>&1 || true
+
+    echo "Starting ${SERVICE}..."
+    systemctl restart "${SERVICE}.service" >/dev/null 2>&1 || \
+    systemctl start "${SERVICE}.service" >/dev/null 2>&1 || true
+
+    printf "%-20s : " "$SERVICE"
+    systemctl is-active "${SERVICE}.service" || true
 
 done
 
@@ -163,7 +161,7 @@ echo "[8/10] Service Status"
 for SERVICE in "${SERVICES[@]}"; do
     if systemctl list-unit-files | grep -q "^${SERVICE}.service"; then
         printf "%-20s : " "$SERVICE"
-        systemctl is-active "${SERVICE}" || true
+        systemctl is-active "${SERVICE}.service" || true
     fi
 done
 
