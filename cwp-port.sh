@@ -80,9 +80,18 @@ echo "[2/10] Enabling CSF..."
 
 if systemctl list-unit-files 2>/dev/null | grep -q '^csf.service'; then
     systemctl unmask csf.service >/dev/null 2>&1 || true
+
+    if [ -L "/etc/systemd/system/csf.service" ]; then
+        TARGET=$(readlink "/etc/systemd/system/csf.service")
+        if [ "$TARGET" = "/dev/null" ]; then
+            rm -f "/etc/systemd/system/csf.service"
+        fi
+    fi
+
     systemctl daemon-reload
-    systemctl enable csf >/dev/null 2>&1 || true
-    systemctl start csf >/dev/null 2>&1 || true
+    systemctl reset-failed csf.service >/dev/null 2>&1 || true
+    systemctl enable csf.service >/dev/null 2>&1 || true
+    systemctl start csf.service >/dev/null 2>&1 || true
 fi
 
 sed -i 's/^TESTING = "1"/TESTING = "0"/' /etc/csf/csf.conf || true
@@ -129,25 +138,37 @@ SERVICES=(
 
 for SERVICE in "${SERVICES[@]}"; do
 
-    if ! systemctl list-unit-files | grep -q "^${SERVICE}.service"; then
+    UNIT="${SERVICE}.service"
+
+    if ! systemctl list-unit-files 2>/dev/null | grep -q "^${UNIT}"; then
         echo "${SERVICE}: not installed"
         continue
     fi
 
-    echo "Unmasking ${SERVICE}..."
-    systemctl unmask "${SERVICE}.service" >/dev/null 2>&1 || true
+    echo "Force unmasking ${SERVICE}..."
+
+    systemctl unmask "$UNIT" >/dev/null 2>&1 || true
+
+    if [ -L "/etc/systemd/system/${UNIT}" ]; then
+        TARGET=$(readlink "/etc/systemd/system/${UNIT}")
+        if [ "$TARGET" = "/dev/null" ]; then
+            echo "Removing masked symlink: /etc/systemd/system/${UNIT}"
+            rm -f "/etc/systemd/system/${UNIT}"
+        fi
+    fi
 
     systemctl daemon-reload
+    systemctl reset-failed "$UNIT" >/dev/null 2>&1 || true
 
     echo "Enabling ${SERVICE}..."
-    systemctl enable "${SERVICE}.service" >/dev/null 2>&1 || true
+    systemctl enable "$UNIT" >/dev/null 2>&1 || true
 
     echo "Starting ${SERVICE}..."
-    systemctl restart "${SERVICE}.service" >/dev/null 2>&1 || \
-    systemctl start "${SERVICE}.service" >/dev/null 2>&1 || true
+    systemctl restart "$UNIT" >/dev/null 2>&1 || \
+    systemctl start "$UNIT" >/dev/null 2>&1 || true
 
     printf "%-20s : " "$SERVICE"
-    systemctl is-active "${SERVICE}.service" || true
+    systemctl is-active "$UNIT" || true
 
 done
 
@@ -159,9 +180,11 @@ echo
 echo "[8/10] Service Status"
 
 for SERVICE in "${SERVICES[@]}"; do
-    if systemctl list-unit-files | grep -q "^${SERVICE}.service"; then
+    UNIT="${SERVICE}.service"
+
+    if systemctl list-unit-files 2>/dev/null | grep -q "^${UNIT}"; then
         printf "%-20s : " "$SERVICE"
-        systemctl is-active "${SERVICE}.service" || true
+        systemctl is-active "$UNIT" || true
     fi
 done
 
