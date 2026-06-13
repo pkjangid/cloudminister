@@ -6,6 +6,7 @@ VPN_IPS=(
     "3.111.17.14"
     "65.1.128.28"
     "172.237.41.71"
+    "52.66.128.52"
 )
 
 CLIENT_IP="${1:-}"
@@ -32,6 +33,10 @@ PORTS=(
     "2096"
 )
 
+########################################
+# ADD-ONLY MODE
+########################################
+
 if [ -n "$CLIENT_IP" ]; then
     echo
     echo "ADD-ONLY MODE"
@@ -48,10 +53,17 @@ if [ -n "$CLIENT_IP" ]; then
         fi
     done
 
+    csf -e >/dev/null 2>&1 || true
     csf -r
+
+    echo
     echo "Completed."
     exit 0
 fi
+
+########################################
+# FULL RESTRICTION MODE
+########################################
 
 echo
 echo "[1/10] Backing up CSF configuration..."
@@ -71,6 +83,12 @@ systemctl enable csf.service >/dev/null 2>&1 || true
 systemctl start csf.service >/dev/null 2>&1 || true
 
 sed -i 's/^TESTING = "1"/TESTING = "0"/' /etc/csf/csf.conf || true
+
+# Enable CSF/LFD if disabled
+csf -e >/dev/null 2>&1 || true
+
+systemctl enable lfd >/dev/null 2>&1 || true
+systemctl start lfd >/dev/null 2>&1 || true
 
 echo
 echo "[3/10] Cleaning old management rules..."
@@ -97,6 +115,8 @@ done
 
 echo
 echo "[5/10] Reloading CSF..."
+
+csf -e >/dev/null 2>&1 || true
 csf -r
 
 echo
@@ -158,6 +178,16 @@ done
 echo
 echo "===================================================="
 echo "Completed Successfully"
+echo
+echo "Restricted ports:"
+echo "  - SSH (${SSH_PORT})"
+echo "  - CWP Panel (2031)"
+echo "  - WHM (2087)"
+echo "  - cPanel SSL (2083)"
+echo "  - Webmail SSL (2096)"
+echo
+echo "Allowed VPN IPs:"
+printf '  - %s\n' "${VPN_IPS[@]}"
 echo
 echo "Usage:"
 echo "  ./cwp-port.sh"
